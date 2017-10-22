@@ -276,7 +276,9 @@ static int8_t init(uint8_t clean_map) {
 	map_current_block.updated = 0xff; // Die MMC-Karte ist erstmal nicht verfuegbar
 
 	LOG_DEBUG("map::init(): sdfat_open(\"%s\")...", MAP_FILENAME);
-	uint8_t res = sdfat_open(MAP_FILENAME, &map_file_desc, 0x1 | 0x2 | 0x40);
+
+	const uint8_t mode = SDFAT_O_RDWR | SDFAT_O_CREAT;
+	uint8_t res = sdfat_open(MAP_FILENAME, &map_file_desc, mode);
 	LOG_DEBUG("map::init(): sdfat_open()=%d", res);
 	if (res != 0) {
 		LOG_DEBUG("map::init(): Dateioeffnen lieferte %d", res);
@@ -345,7 +347,7 @@ static int8_t init(uint8_t clean_map) {
 		LOG_DEBUG("map::init(): min_block=%u max_block=%u", min_block, max_block);
 
 		if (sdfat_seek(map_file_desc, (int32_t) (min_block * MAP_BLOCK_SIZE) + sizeof(map_header_t), SEEK_SET)) {
-			LOG_DEBUG("map::init(): sdfat_seek(0x%x) failed", min_block * MAP_BLOCK_SIZE);
+			LOG_DEBUG("map::init(): sdfat_seek(0x%ld) failed", min_block * MAP_BLOCK_SIZE);
 			return 7;
 		}
 
@@ -374,7 +376,7 @@ static int8_t init(uint8_t clean_map) {
 #endif
 
 #ifdef MAP_2_SIM_AVAILABLE
-	if (sdfat_open(MAP_FILENAME, &map_2_sim_file_desc, 0x1)) {
+	if (sdfat_open(MAP_FILENAME, &map_2_sim_file_desc, SDFAT_O_READ)) {
 		LOG_DEBUG("map::init(): Mapdatei konnte nicht fuer Map-2-Sim geoeffnet werden");
 		return 9;
 	}
@@ -558,7 +560,7 @@ static map_section_t* get_section(int16_t x, int16_t y) {
 
 		/* Dann erstmal sichern */
 #ifdef DEBUG_MAP_TIMES
-		LOG_INFO("writing block 0x%04x%04x", (uint16_t) (mmc_block >> 16), (uint16_t) mmc_block);
+		LOG_INFO("writing block 0%x", map_current_block.block + alignment_offset);
 		uint16_t start_ticks = TIMER_GET_TICKCOUNT_16;
 #endif
 		if (sdfat_seek(map_file_desc, (int32_t) ((map_current_block.block + alignment_offset) * MAP_BLOCK_SIZE) + sizeof(map_header_t), SEEK_SET)) {
@@ -585,6 +587,8 @@ static map_section_t* get_section(int16_t x, int16_t y) {
 #ifdef DEBUG_MAP_TIMES
 		uint16_t end_ticks = TIMER_GET_TICKCOUNT_16;
 		LOG_INFO("swapout took %u ms", (end_ticks - start_ticks) * 176 / 1000);
+		(void) start_ticks;
+		(void) end_ticks;
 #endif
 	}
 
@@ -596,7 +600,7 @@ static map_section_t* get_section(int16_t x, int16_t y) {
 
 	/* Lade den neuen Block */
 #ifdef DEBUG_MAP_TIMES
-	LOG_INFO("reading block 0x%04x%04x", (uint16_t)(mmc_block >> 16), (uint16_t) mmc_block);
+	LOG_INFO("reading block 0x%x", block + alignment_offset);
 	uint16_t start_ticks = TIMER_GET_TICKCOUNT_16;
 #endif
 	if (sdfat_seek(map_file_desc, (int32_t) ((block + alignment_offset) * MAP_BLOCK_SIZE) + sizeof(map_header_t), SEEK_SET)) {
@@ -610,6 +614,8 @@ static map_section_t* get_section(int16_t x, int16_t y) {
 #ifdef DEBUG_MAP_TIMES
 	uint16_t end_ticks = TIMER_GET_TICKCOUNT_16;
 	LOG_INFO("swapin took %u ms", (end_ticks - start_ticks) * 176 / 1000);
+	(void) start_ticks;
+	(void) end_ticks;
 #endif
 
 	return map[index];
@@ -1289,7 +1295,8 @@ void map_update_main(void) {
 
 		os_signal_lock(&lock_signal); // Zugriff auf die Map sperren
 #ifdef DEBUG_SCAN_OTF
-		LOG_DEBUG("lese Cache: x= %d y= %d head= %f distance= %d loaction=%d border=%d", cache_tmp->x_pos, cache_tmp->y_pos, cache_tmp->heading / 10.0f, cache_tmp->mode.data.distance, cache_tmp->mode.data.location, cache_tmp->mode.data.border);
+		LOG_DEBUG("lese Cache: x= %d y= %d distance= %d loaction=%d border=%d", cache_tmp->x_pos, cache_tmp->y_pos, cache_tmp->mode.data.distance,
+			cache_tmp->mode.data.location, cache_tmp->mode.data.border);
 
 		if ((cache_tmp->mode.data.distance || cache_tmp->mode.data.location || cache_tmp->mode.data.border) == 0)
 		LOG_DEBUG("Achtung: Dieser Eintrag ergibt keinen Sinn, kein einziges mode-bit gesetzt");
@@ -1566,13 +1573,13 @@ int8_t map_save_to_file(const char* file) {
 	LOG_INFO("map_save_to_file(): map_min_x=%u, map_max_x=%u, map_min_y=%u, map_max_y=%u", map_min_x, map_max_x, map_min_y, map_max_y);
 
 	pFatFile dest;
-	if (sdfat_open(file, &dest, 0x1 | 0x2 | 0x10 | 0x40)) {
+	if (sdfat_open(file, &dest, SDFAT_O_RDWR | SDFAT_O_TRUNC | SDFAT_O_CREAT)) {
 		LOG_ERROR("map_save_to_file(): file create failed");
 		return 1;
 	}
 
 	const uint32_t size = sdfat_get_filesize(map_file_desc) / MAP_BLOCK_SIZE;
-	LOG_INFO("map_save_to_file(): size=0x%x blocks", size - alignment_offset - sizeof(map_header_t) / MAP_BLOCK_SIZE);
+	LOG_INFO("map_save_to_file(): size=0x%lx blocks", size - alignment_offset - sizeof(map_header_t) / MAP_BLOCK_SIZE);
 	sdfat_rewind(map_file_desc);
 	uint32_t i;
 	for (i = 0; i < size; ++i) {
@@ -1617,7 +1624,7 @@ int8_t map_load_from_file(const char* file) {
 
 	/* Quelldatei oeffnen */
 	pFatFile src_file;
-	uint8_t res = sdfat_open(file, &src_file, 0x1);
+	uint8_t res = sdfat_open(file, &src_file, SDFAT_O_READ);
 	if (res) {
 		LOG_DEBUG("map_load_from_file(): sdfat_open(\"%s\")=%u", file, res);
 		LOG_ERROR("map_load_from_file(): sdfat_open() failed");
@@ -1659,14 +1666,14 @@ int8_t map_load_from_file(const char* file) {
 	const uint32_t size = sdfat_get_filesize(src_file) / MAP_BLOCK_SIZE - src_alignment_offset - sizeof(map_header_t) / MAP_BLOCK_SIZE;
 
 	if (sdfat_seek(src_file, src_alignment_offset * MAP_BLOCK_SIZE + sizeof(map_header_t), SEEK_SET)) {
-		LOG_ERROR("map_load_from_file(): sdfat_seek(0x%x) failed", src_alignment_offset * MAP_BLOCK_SIZE + sizeof(map_header_t));
+		LOG_ERROR("map_load_from_file(): sdfat_seek(0x%lx) failed", src_alignment_offset * MAP_BLOCK_SIZE + sizeof(map_header_t));
 		sdfat_close(src_file);
 		os_signal_unlock(&lock_signal);
 		return 5;
 	}
 
 	if (sdfat_seek(map_file_desc, alignment_offset * MAP_BLOCK_SIZE + sizeof(map_header_t), SEEK_SET)) {
-		LOG_ERROR("map_load_from_file(): sdfat_seek(0x%x) failed", alignment_offset * MAP_BLOCK_SIZE + sizeof(map_header_t));
+		LOG_ERROR("map_load_from_file(): sdfat_seek(0x%lx) failed", alignment_offset * MAP_BLOCK_SIZE + sizeof(map_header_t));
 		sdfat_close(src_file);
 		os_signal_unlock(&lock_signal);
 		return 6;
@@ -2015,9 +2022,9 @@ static int map_test_get_ratio(void) {
  */
 static void info(void) {
 	LOG_INFO("MAP:");
-	LOG_INFO("%u\t Punkte pro Section (MAP_SECTIONS)", MAP_SECTIONS);
+	LOG_INFO("%zu\t Punkte pro Section (MAP_SECTIONS)", (size_t) MAP_SECTIONS);
 	LOG_INFO("%u\t Sections (MAP_SECTION_POINTS)", MAP_SECTION_POINTS);
-	LOG_INFO("%u\t Punkte Kantenlaenge (MAP_SECTION_POINTS*MAP_SECTIONS)", MAP_SECTION_POINTS * MAP_SECTIONS);
+	LOG_INFO("%zu\t Punkte Kantenlaenge (MAP_SECTION_POINTS*MAP_SECTIONS)", (size_t) (MAP_SECTION_POINTS * MAP_SECTIONS));
 	uint32_t points_in_map = (uint32_t) MAP_SECTION_POINTS * (uint32_t)MAP_SECTION_POINTS * (uint32_t) MAP_SECTIONS * (uint32_t)MAP_SECTIONS;
 	LOG_INFO("%u%u\t Punkte gesamt", (uint16_t) (points_in_map / 10000), (uint16_t) (points_in_map % 10000) );
 	points_in_map /= 1024; // Umrechnen in KByte
